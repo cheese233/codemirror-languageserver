@@ -1,7 +1,12 @@
 import { autocompletion } from '@codemirror/autocomplete';
 import { setDiagnostics } from '@codemirror/lint';
 import { Facet } from '@codemirror/state';
-import { EditorView, ViewPlugin, Tooltip, hoverTooltip } from '@codemirror/view';
+import {
+    EditorView,
+    ViewPlugin,
+    Tooltip,
+    hoverTooltip,
+} from '@codemirror/view';
 import {
     RequestManager,
     Client,
@@ -33,7 +38,9 @@ const CompletionItemKindMap = Object.fromEntries(
 
 const useLast = (values: readonly any[]) => values.reduce((_, v) => v, '');
 
-const client = Facet.define<LanguageServerClient, LanguageServerClient>({ combine: useLast });
+const client = Facet.define<LanguageServerClient, LanguageServerClient>({
+    combine: useLast,
+});
 const documentUri = Facet.define<string, string>({ combine: useLast });
 const languageId = Facet.define<string, string>({ combine: useLast });
 
@@ -85,43 +92,15 @@ export class LanguageServerClient {
     private plugins: LanguageServerPlugin[];
 
     public initializePromise: Promise<void>;
-
+    private clientCapabilities: LSP.ClientCapabilities;
     constructor(options: LanguageServerClientOptions) {
         this.rootUri = options.rootUri;
         this.workspaceFolders = options.workspaceFolders;
         this.autoClose = options.autoClose;
         this.plugins = [];
-        this.transport =  options.transport;
-        
-        this.requestManager = new RequestManager([this.transport]);
-        this.client = new Client(this.requestManager);
-
-        this.client.onNotification((data) => {
-            this.processNotification(data as any);
-        });
-
-        const webSocketTransport = <WebSocketTransport>this.transport
-        if (webSocketTransport && webSocketTransport.connection) {
-            // XXX(hjr265): Need a better way to do this. Relevant issue:
-            // https://github.com/FurqanSoftware/codemirror-languageserver/issues/9
-            webSocketTransport.connection.addEventListener('message', (message) => {
-                const data = JSON.parse(message.data);
-                if (data.method && data.id) {
-                    webSocketTransport.connection.send(JSON.stringify({
-                        jsonrpc: '2.0',
-                        id: data.id,
-                        result: null
-                    }));
-                }
-            });
-        }
-        
-        this.initializePromise = this.initialize();
-    }
-
-    async initialize() {
-        const { capabilities } = await this.request('initialize', {
-            capabilities: {
+        this.transport = options.transport;
+        this.clientCapabilities = Object.assign(
+            {
                 textDocument: {
                     hover: {
                         dynamicRegistration: true,
@@ -174,11 +153,52 @@ export class LanguageServerClient {
                     },
                 },
             },
-            initializationOptions: null,
-            processId: null,
-            rootUri: this.rootUri,
-            workspaceFolders: this.workspaceFolders,
-        }, timeout * 3);
+            options.capabilities
+        );
+
+        this.requestManager = new RequestManager([this.transport]);
+        this.client = new Client(this.requestManager);
+
+        this.client.onNotification((data) => {
+            this.processNotification(data as any);
+        });
+
+        const webSocketTransport = <WebSocketTransport>this.transport;
+        if (webSocketTransport && webSocketTransport.connection) {
+            // XXX(hjr265): Need a better way to do this. Relevant issue:
+            // https://github.com/FurqanSoftware/codemirror-languageserver/issues/9
+            webSocketTransport.connection.addEventListener(
+                'message',
+                (message) => {
+                    const data = JSON.parse(message.data);
+                    if (data.method && data.id) {
+                        webSocketTransport.connection.send(
+                            JSON.stringify({
+                                jsonrpc: '2.0',
+                                id: data.id,
+                                result: null,
+                            })
+                        );
+                    }
+                }
+            );
+        }
+
+        this.initializePromise = this.initialize();
+    }
+
+    async initialize() {
+        const { capabilities } = await this.request(
+            'initialize',
+            {
+                capabilities: this.clientCapabilities,
+                initializationOptions: null,
+                processId: null,
+                rootUri: this.rootUri,
+                workspaceFolders: this.workspaceFolders,
+            },
+            timeout * 3
+        );
         this.capabilities = capabilities;
         this.notify('initialized', {});
         this.ready = true;
@@ -193,15 +213,15 @@ export class LanguageServerClient {
     }
 
     textDocumentDidChange(params: LSP.DidChangeTextDocumentParams) {
-        return this.notify('textDocument/didChange', params)
+        return this.notify('textDocument/didChange', params);
     }
 
     async textDocumentHover(params: LSP.HoverParams) {
-        return await this.request('textDocument/hover', params, timeout)
+        return await this.request('textDocument/hover', params, timeout);
     }
 
     async textDocumentCompletion(params: LSP.CompletionParams) {
-        return await this.request('textDocument/completion', params, timeout)
+        return await this.request('textDocument/completion', params, timeout);
     }
 
     attachPlugin(plugin: LanguageServerPlugin) {
@@ -242,7 +262,7 @@ class LanguageServerPlugin implements PluginValue {
     private documentUri: string;
     private languageId: string;
     private documentVersion: number;
-    
+
     private changesTimeout: number;
 
     constructor(private view: EditorView, private allowHTMLContent: boolean) {
@@ -253,7 +273,7 @@ class LanguageServerPlugin implements PluginValue {
         this.changesTimeout = 0;
 
         this.client.attachPlugin(this);
-        
+
         this.initialize({
             documentText: this.view.state.doc.toString(),
         });
@@ -274,7 +294,7 @@ class LanguageServerPlugin implements PluginValue {
     }
 
     async initialize({ documentText }: { documentText: string }) {
-         if (this.client.initializePromise) {
+        if (this.client.initializePromise) {
             await this.client.initializePromise;
         }
         this.client.textDocumentDidOpen({
@@ -283,7 +303,7 @@ class LanguageServerPlugin implements PluginValue {
                 languageId: this.languageId,
                 text: documentText,
                 version: this.documentVersion,
-            }
+            },
         });
     }
 
@@ -310,7 +330,8 @@ class LanguageServerPlugin implements PluginValue {
         view: EditorView,
         { line, character }: { line: number; character: number }
     ): Promise<Tooltip | null> {
-        if (!this.client.ready || !this.client.capabilities!.hoverProvider) return null;
+        if (!this.client.ready || !this.client.capabilities!.hoverProvider)
+            return null;
 
         this.sendChange({ documentText: view.state.doc.toString() });
         const result = await this.client.textDocumentHover({
@@ -344,7 +365,8 @@ class LanguageServerPlugin implements PluginValue {
             triggerCharacter: string | undefined;
         }
     ): Promise<CompletionResult | null> {
-        if (!this.client.ready || !this.client.capabilities!.completionProvider) return null;
+        if (!this.client.ready || !this.client.capabilities!.completionProvider)
+            return null;
         this.sendChange({
             documentText: context.state.doc.toString(),
         });
@@ -355,7 +377,7 @@ class LanguageServerPlugin implements PluginValue {
             context: {
                 triggerKind,
                 triggerCharacter,
-            }
+            },
         });
 
         if (!result) return null;
@@ -448,7 +470,13 @@ class LanguageServerPlugin implements PluginValue {
                 } as const)[severity!],
                 message,
             }))
-            .filter(({ from, to }) => from !== null && to !== null && from !== undefined && to !== undefined)
+            .filter(
+                ({ from, to }) =>
+                    from !== null &&
+                    to !== null &&
+                    from !== undefined &&
+                    to !== undefined
+            )
             .sort((a, b) => {
                 switch (true) {
                     case a.from < b.from:
@@ -471,8 +499,9 @@ interface LanguageServerBaseOptions {
 }
 
 interface LanguageServerClientOptions extends LanguageServerBaseOptions {
-    transport: Transport,
+    transport: Transport;
     autoClose?: boolean;
+    capabilities?: LSP.ClientCapabilities;
 }
 
 interface LanguageServerOptions extends LanguageServerClientOptions {
@@ -484,23 +513,32 @@ interface LanguageServerWebsocketOptions extends LanguageServerBaseOptions {
     serverUri: `ws://${string}` | `wss://${string}`;
 }
 
-export function languageServer(options: LanguageServerWebsocketOptions){
+export function languageServer(options: LanguageServerWebsocketOptions) {
     const serverUri = options.serverUri;
     delete options.serverUri;
     return languageServerWithTransport({
         ...options,
-        transport: new WebSocketTransport(serverUri)
-    })
+        transport: new WebSocketTransport(serverUri),
+    });
 }
 
 export function languageServerWithTransport(options: LanguageServerOptions) {
     let plugin: LanguageServerPlugin | null = null;
 
     return [
-        client.of(options.client || new LanguageServerClient({...options, autoClose: true})),
+        client.of(
+            options.client ||
+                new LanguageServerClient({ ...options, autoClose: true })
+        ),
         documentUri.of(options.documentUri),
         languageId.of(options.languageId),
-        ViewPlugin.define((view) => (plugin = new LanguageServerPlugin(view, options.allowHTMLContent))),
+        ViewPlugin.define(
+            (view) =>
+                (plugin = new LanguageServerPlugin(
+                    view,
+                    options.allowHTMLContent
+                ))
+        ),
         hoverTooltip(
             (view, pos) =>
                 plugin?.requestHoverTooltip(
